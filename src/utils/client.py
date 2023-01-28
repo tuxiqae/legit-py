@@ -3,63 +3,41 @@ import os
 from typing import Dict
 
 import requests
+from pydantic import SecretStr
 
 from utils import logs
-from utils.consts import (APP_NAME, APP_VERSION, KC_AUTH_ENDPOINT,
-                          KC_DEFAULT_REALM, KC_REALMS_ROUTE, KC_URL_PREFIX)
+from utils.consts import (
+    APP_NAME,
+    APP_VERSION,
+    KC_AUTH_ENDPOINT,
+    KC_DEFAULT_REALM,
+    KC_REALMS_ROUTE,
+    KC_URL_PREFIX,
+)
 
 
-def create_superuser():
-    """
-    Create a maintenance user which the application will use in order to communicate with the KeyCloak server without overusing the admin account.
-    """
-    admin_username: str = os.environ.get("KEYCLOAK_USER", "admin")
-    _admin_password: str | None = os.environ.get("KEYCLOAK_PASSWORD", None)
-    maintenance_username: str = os.environ.get("KC_USER_NAME", "maintenance")
-    _maintenance_password: str | None = os.environ.get("KC_USER_PASS", None)
-
-    if not all((_admin_password, _maintenance_password)):
-        logs.logger.exception(
-            "Both 'KC_ADMIN_PASSWORD' and 'KC_USER_PASS' are required"
-        )
-        exit(1)
-
+def get_access_token(response: requests.Response) -> SecretStr:
     try:
-        auth_res = auth_user(admin_username, _admin_password)
-        # If the basic user creation doesn't work, terminate the app
-        auth_res.raise_for_status()
-        _token = auth_res.json()["access_token"]
-    except requests.HTTPError:
-        logs.logger.exception(
-            "Could not authenticate to KeyCloak. Terminating app...",
-            url=KC_URL_PREFIX,
-            user=admin_username,
-        )
-        exit(1)
+        return SecretStr(response.json()["access_token"])
     except KeyError:
         logs.logger.exception(
-            "Could not fetch the token out of the authentication response. Terminating app..."
+            "Authorization was not successful", response=response.json()
         )
-        exit(1)
-    except:
-        logs.logger.exception("Exception has occured. Terminating app...")
-        exit(1)
+        raise SystemExit(1)
 
-    try:
-        create_user_res = create_user(
-            _token, maintenance_username, _maintenance_password
+
+def auth_admin(realm: str = KC_DEFAULT_REALM) -> requests.Response:
+    admin_username: str = os.environ.get("KEYCLOAK_USER", "admin")
+    _admin_password: SecretStr = SecretStr(os.environ.get("KEYCLOAK_PASSWORD", ""))
+    if len(_admin_password) == 0:
+        raise ValueError(
+            "No password for the admin account has been received, please use 'KEYCLOAK_PASSWORD'"
         )
-        create_user_res.raise_for_status()
-    except requests.HTTPError:
-        logs.logger.exception(
-            "Could not create new user. Terminating...", user=maintenance_username
-        )
-        logs.logger.debug(create_user_res.json())
-        exit(1)
+    return auth_user(admin_username, _admin_password, realm)
 
 
 def auth_user(
-    username: str, _password: str, realm: str = KC_DEFAULT_REALM
+    username: str, _password: SecretStr, realm: str = KC_DEFAULT_REALM
 ) -> requests.Response:
     auth_endpoint: str = f"{KC_URL_PREFIX}/{KC_REALMS_ROUTE}/{realm}/{KC_AUTH_ENDPOINT}"
     headers = {
@@ -71,26 +49,25 @@ def auth_user(
         "grant_type": "password",
         "client_id": "admin-cli",
         "username": username,
-        "password": _password,
+        "password": _password.get_secret_value(),
     }
+    logs.logger.debug("Authenticating new user!", user=username)
     return requests.post(auth_endpoint, headers=headers, data=credentials)
 
 
-def create_user(
-    _token: str, new_username: str, _new_password: str, realm: str = KC_DEFAULT_REALM
-) -> requests.Response:
-    add_user_endpoint = f"{KC_URL_PREFIX}/auth/admin/realms/{realm}/users"
-    user_rep = {
-        "enabled": True,
-        "username": new_username,
-        "credentials": [
-            {"type": "password", "value": _new_password, "temporary": False}
-        ],
-    }
-
+def add_realm(_token: SecretStr, realm: str) -> requests.Response:
+    add_realm_endpoint: str = f"{KC_URL_PREFIX}/auth/admin/realms"
     headers = {
         "user-agent": f"{APP_NAME}/{APP_VERSION}",
         "Content-type": "application/json",
-        "Authorization": f"bearer {_token}",
+        "Authorization": f"bearer {_token.get_secret_value()}",
     }
-    return requests.post(add_user_endpoint, headers=headers, data=json.dumps(user_rep))
+
+    realm_props = {
+        "id": realm,
+        "realm": realm,
+    }
+
+    return requests.post(
+        add_realm_endpoint, headers=headers, data=json.dumps(realm_props)
+    )

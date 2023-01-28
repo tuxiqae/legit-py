@@ -1,26 +1,18 @@
-import uuid  # TODO: Add uuid.uuid4 as a request identifier
+import fastapi
+from fastapi import APIRouter, HTTPException, Path
 
-import pydantic
-from fastapi import APIRouter, Depends, HTTPException, Path
-
-from utils import logs
+from utils import client, logs
 
 SUBDOMAIN_VALIDATION_REGEX = r"[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
-
-# class KeyCloakServerCredentials(pydantic.BaseModel):
-#     username: str
-#     password: str
-
-
-# async def common_parameters(creds: KeyCloakServerCredentials):
-#     return creds
 
 
 realm_router: APIRouter = APIRouter(
     prefix="/realms",
     tags=["realms"],
-    # dependencies=[Depends(common_parameters)],
     responses={
+        201: {"description": "Success"},
+        401: {"description": "Unauthorized"},
+        409: {"description": "Conflict"},
         404: {"description": "Not found"},
         422: {"description": "Invalid input"},
     },
@@ -39,12 +31,32 @@ async def get_realm(realm_name: str):
     raise HTTPException(status_code=404, detail="Not implemented")
 
 
+def create_realm_retry(request: fastapi.Request, realm_name: str, retries: int = 1):
+    _token = request.app.state.access_token
+    res = client.add_realm(_token, realm_name)
+    if res.status_code == 201:
+        # The realm was successfully created!
+        logs.logger.info("New Realm has been created!", realm_name=realm_name)
+        return {"message": f"Created realm '{realm_name}'"}
+    elif res.status_code == 401 and retries:
+        # Token is invalid, reauthenticating
+        logs.logger.info("Invalid token, reauthenticating", retries=retries)
+        res = client.auth_admin()
+        request.app.state.access_token = client.get_access_token(res)
+        create_realm_retry(request, realm_name, retries - 1)
+    elif res.status_code == 409:
+        # The realm exists in the system.
+        logs.logger.warning("The realm already exists in the system", realm=realm_name)
+        return {"message": f"Realm '{realm_name}' already exists in the system."}
+    else:
+        res.raise_for_status()
+
+
 @realm_router.post("/{realm_name}")
 async def create_realm(
+    request: fastapi.Request,
     realm_name: str = Path(
         min_length=1, max_length=64, regex=SUBDOMAIN_VALIDATION_REGEX
-    )
+    ),
 ):
-    logs.logger.info("ABC", realm_name=realm_name)
-
-    return {"message": "abc"}
+    return create_realm_retry(request, realm_name)

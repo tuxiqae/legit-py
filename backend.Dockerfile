@@ -2,8 +2,7 @@
 FROM python:3.10 AS builder
 
 # install PDM
-RUN pip install -U --no-cache-dir pip setuptools wheel
-RUN pip install --no-cache-dir pdm
+RUN pip install -U --no-cache-dir pip setuptools wheel pdm
 
 # copy files
 COPY pyproject.toml pdm.lock README.md /project/

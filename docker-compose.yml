@@ -3,10 +3,8 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: postgres
-    environment:
-      POSTGRES_DB: keycloak
-      POSTGRES_USER: keycloak
-      POSTGRES_PASSWORD: password
+    env_file:
+      - env/.postgres
     healthcheck:
       test: ["CMD", "pg_isready", "-d", "keycloak", "-U", "keycloak"]
       interval: 10s
@@ -17,19 +15,10 @@ services:
     image: jboss/keycloak:16.1.1
     container_name: keycloak
     env_file:
-      - .credentials
-    environment:
-      DB_VENDOR: POSTGRES
-      DB_ADDR: postgres
-      DB_DATABASE: keycloak
-      DB_USER: keycloak
-      DB_PASSWORD: password
-      # KEYCLOAK_USER: ${KC_ADMIN:-admin}
-      # # KEYCLOAK_PASSWORD: ${KC_ADMIN_PASSWORD}
-      # KEYCLOAK_PASSWORD: ${KEYCLOAK_PASSWORD}
+      - env/.credentials
+      - env/.keycloak
     healthcheck:
-      test:
-        ["CMD", "curl", "-f", "http://0.0.0.0:8080/auth/realms/master"]
+      test: ["CMD", "curl", "-f", "http://0.0.0.0:8080/auth/realms/master"]
       start_period: 20s
       interval: 30s
       retries: 3
@@ -41,20 +30,22 @@ services:
         condition: service_healthy
 
   backend:
+    container_name: backend
     build:
       context: .
       tags:
         - "legit-py/backend:latest"
-        - "legit-py/backend:0.1.0" # TODO: Replace version with env var
+        - "legit-py/backend:${VERSION}"
       dockerfile: backend.Dockerfile
       labels:
         com.legit.description: "KeyCloak Realm Creation API"
+        com.legit.version: "${VERSION}"
       pull: true
     ports:
       - ${APP_PORT}:${APP_PORT}
     env_file:
-      - .env
-      - .credentials
+      - env/.env
+      - env/.credentials
     depends_on:
       keycloak:
         condition: service_healthy
