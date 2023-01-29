@@ -4,6 +4,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from utils import logs
+from utils.settings import Settings
 
 from .routers import realms
 
@@ -32,15 +33,17 @@ You will be able to:
     return conf
 
 
-def get_app() -> FastAPI:
+def get_app(settings: Settings) -> FastAPI:
     conf = _get_app_config()
     app = FastAPI(**conf)
+    app.state.settings = settings
     app.include_router(realms.realm_router)
 
     return app
 
 
 def init_app(app: FastAPI, *args, **kwargs) -> None:
+    settings = app.state.settings
     logs.logger.info("Starting the webapp! 🚀")
-    uvicorn.run(app, *args, **kwargs)
+    uvicorn.run(app, host=str(settings.address), port=settings.port, *args, **kwargs)
     logs.logger.info("Shutting down...")
